@@ -1,0 +1,2 @@
+# zbar
+gtk bar
