@@ -1,7 +1,8 @@
 // A minimal bar using the GTK toolkit.
 const std = @import("std");
 const Clock = @import("modules/clock.zig").Clock;
-const Separator = @import("modules/separator.zig").Separator;
+const Shapes = @import("modules/shapes.zig").Shapes;
+const Tray = @import("modules/tray.zig").Tray;
 
 // Import the C headers for GTK4 and the GTK Layer Shell library.
 const c = @cImport({
@@ -35,12 +36,25 @@ fn activate(app: *c.GtkApplication, _: ?*anyopaque) callconv(.C) void {
     const end_box = c.gtk_box_new(c.GTK_ORIENTATION_HORIZONTAL, 0);
     c.gtk_center_box_set_end_widget(@ptrCast(main_box), @ptrCast(end_box));
 
+    // assign colors to the boxes
+    const tray_color = 0x6C7086;
     const clock_color = 0xFAB387;
-    const sep1 = Separator.init(clock_color);
-    const clock_module = Clock.init();
 
-    c.gtk_box_append(@ptrCast(end_box), @ptrCast(sep1.widget));
+    // initilize the modules and separators
+    const tray_module = Tray.init();
+    const sep_tray_1 = Shapes.init(tray_color, Shapes.draw_forward_triangle);
+    const sep_tray_2 = Shapes.init(tray_color, Shapes.draw_reverse_triangle);
+    const clock_module = Clock.init();
+    const sep2 = Shapes.init(clock_color, Shapes.draw_forward_triangle);
+
+    // generate the gtk boxes from the modules
+    c.gtk_box_append(@ptrCast(end_box), @ptrCast(sep_tray_1.widget));
+    c.gtk_box_append(@ptrCast(end_box), @ptrCast(tray_module.box));
+    c.gtk_box_append(@ptrCast(end_box), @ptrCast(sep_tray_2.widget));
+    c.gtk_box_append(@ptrCast(end_box), @ptrCast(sep2.widget));
     c.gtk_box_append(@ptrCast(end_box), @ptrCast(clock_module.box));
+
+    // present the gtk app
     c.gtk_window_present(@ptrCast(window));
 }
 
@@ -63,6 +77,10 @@ const css =
     \\    background-color: #FAB387;
     \\    color: #1E1E2E;
     \\    font-weight: bold;
+    \\}
+    \\
+    \\box.tray {
+    \\    background-color: #6C7086;
     \\}
     \\
     \\label {
