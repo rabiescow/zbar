@@ -17,6 +17,11 @@ const TrayItem = struct {
 pub const Tray = struct {
     box: *c.GtkWidget,
 
+    const AsyncCallData = struct {
+        tray_module: *Tray,
+        connection: *c.GDBusConnection,
+    };
+
     pub fn init() *Tray {
         const tray_box = c.gtk_box_new(c.GTK_ORIENTATION_HORIZONTAL, 5);
         var css_classes = [_]?[*:0]const u8{ "module-box", "tray", null };
@@ -44,42 +49,54 @@ pub const Tray = struct {
         c.gtk_box_append(@ptrCast(self.box), @ptrCast(icon));
     }
 
+    fn on_get_items_reply(_: ?*c.GObject, res: *c.GAsyncResult, user_data: ?*anyopaque) callconv(.C) void {
+        const call_data: *AsyncCallData = @ptrCast(@alignCast(user_data orelse unreachable));
+        const self = call_data.tray_module;
+        const connection = call_data.connection;
+
+        const reply = c.g_dbus_connection_call_finish(connection, res, null);
+        if (reply == null) {
+            std.log.err("Failed to get reply for RegisteredStatusNotifierItems.", .{});
+            return;
+        }
+        defer c.g_variant_unref(reply);
+
+        var variant: *c.GVariant = undefined;
+        c.g_variant_get(reply, "(v)", &variant);
+        defer c.g_variant_unref(variant);
+
+        const iter = c.g_variant_iter_new(variant);
+        defer c.g_variant_iter_free(iter);
+        var service_name_ptr: [*c]const u8 = undefined;
+
+        // Iterate through the array and add each item
+        while (c.g_variant_iter_next(iter, "s", &service_name_ptr) != 0) {
+            self.add_tray_item(std.mem.span(service_name_ptr));
+        }
+    }
+
     // This function is called when the StatusNotifierWatcher service appears on D-Bus.
     fn on_name_appeared(connection: *c.GDBusConnection, _: [*c]const u8, _: [*c]const u8, data: ?*anyopaque) callconv(.C) void {
         const self: *Tray = @ptrCast(@alignCast(data orelse unreachable));
         std.log.info("Tray watcher appeared, connecting...", .{});
 
-        // Now that the watcher service is available, we subscribe to its signals.
-        // We are interested in the "StatusNotifierItemRegistered" signal, which tells
-        // us when a new application wants to show a tray icon.
-        const registered_items = c.g_dbus_connection_call_sync(
+        const call_data = std.heap.c_allocator.create(AsyncCallData) catch @panic("oom");
+        call_data.* = .{ .tray_module = self, .connection = connection };
+
+        c.g_dbus_connection_call(
             connection,
             "org.kde.StatusNotifierWatcher",
             "/StatusNotifierWatcher",
             "org.freedesktop.DBus.Properties",
             "Get",
-            c.g_variant_new("(ss)", "org.kde.StatusNotifierWatcher", "RegisteredStatusNotifierTime"),
+            c.g_variant_new("(ss)", "org.kde.StatusNotifierWatcher", "RegisteredStatusNotifierItems"),
             null,
             c.G_DBUS_CALL_FLAGS_NONE,
             -1,
             null,
-            null,
+            @ptrCast(&on_get_items_reply), // The callback to run when the reply arrives
+            @ptrCast(call_data),
         );
-
-        if (registered_items != null) {
-            defer c.g_variant_unref(registered_items);
-
-            var variant: *c.GVariant = undefined;
-            c.g_variant_get(registered_items, "(v)", &variant);
-            defer c.g_variant_unref(variant);
-
-            const iter = c.g_variant_iter_new(variant);
-            var service_name_ptr: [*c]const u8 = undefined;
-            while (c.g_variant_iter_next(iter, "s", &service_name_ptr) != 0) {
-                self.add_tray_item(std.mem.span(service_name_ptr));
-            }
-            c.g_variant_iter_free(iter);
-        }
 
         _ = c.g_dbus_connection_signal_subscribe(connection, "org.kde.StatusNotifierWatcher", "org.kde.StatusNotifierWatcher", "StatusNotifierItemRegistered", "/StatusNotifierWatcher", null, c.G_DBUS_SIGNAL_FLAGS_NONE, @ptrCast(&on_item_registered), @ptrCast(self), null);
     }
