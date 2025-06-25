@@ -38,7 +38,11 @@ pub const Tray = struct {
         return self;
     }
 
-    // --- D-Bus Callbacks ---
+    fn add_tray_item(self: *Tray, service_name: []const u8) void {
+        std.log.info("Adding tray item for service: {s}", .{service_name});
+        const icon = c.gtk_image_new_from_icon_name("dialog-information-symbolic");
+        c.gtk_box_append(@ptrCast(self.box), @ptrCast(icon));
+    }
 
     // This function is called when the StatusNotifierWatcher service appears on D-Bus.
     fn on_name_appeared(connection: *c.GDBusConnection, _: [*c]const u8, _: [*c]const u8, data: ?*anyopaque) callconv(.C) void {
@@ -48,18 +52,36 @@ pub const Tray = struct {
         // Now that the watcher service is available, we subscribe to its signals.
         // We are interested in the "StatusNotifierItemRegistered" signal, which tells
         // us when a new application wants to show a tray icon.
-        _ = c.g_dbus_connection_signal_subscribe(
+        const registered_items = c.g_dbus_connection_call_sync(
             connection,
-            "org.kde.StatusNotifierWatcher", // Service name
-            "org.kde.StatusNotifierItem", // Interface name
-            "StatusNotifierItemRegistered", // Signal name
-            null, // Object path (null means any)
-            null, // Arg0 filter (null means any)
-            c.G_DBUS_SIGNAL_FLAGS_NONE,
-            @ptrCast(&on_item_registered),
-            @ptrCast(self),
+            "org.kde.StatusNotifierWatcher",
+            "/StatusNotifierWatcher",
+            "org.freedesktop.DBus.Properties",
+            "Get",
+            c.g_variant_new("(ss)", "org.kde.StatusNotifierWatcher", "RegisteredStatusNotifierTime"),
+            null,
+            c.G_DBUS_CALL_FLAGS_NONE,
+            -1,
+            null,
             null,
         );
+
+        if (registered_items != null) {
+            defer c.g_variant_unref(registered_items);
+
+            var variant: *c.GVariant = undefined;
+            c.g_variant_get(registered_items, "(v)", &variant);
+            defer c.g_variant_unref(variant);
+
+            const iter = c.g_variant_iter_new(variant);
+            var service_name_ptr: [*c]const u8 = undefined;
+            while (c.g_variant_iter_next(iter, "s", &service_name_ptr) != 0) {
+                self.add_tray_item(std.mem.span(service_name_ptr));
+            }
+            c.g_variant_iter_free(iter);
+        }
+
+        _ = c.g_dbus_connection_signal_subscribe(connection, "org.kde.StatusNotifierWatcher", "org.kde.StatusNotifierWatcher", "StatusNotifierItemRegistered", "/StatusNotifierWatcher", null, c.G_DBUS_SIGNAL_FLAGS_NONE, @ptrCast(&on_item_registered), @ptrCast(self), null);
     }
 
     // This function is called when a tray application disconnects.
